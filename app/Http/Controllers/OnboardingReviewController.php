@@ -17,7 +17,7 @@ class OnboardingReviewController extends Controller
         $type = $request->query('type');
 
         $institutions = Institution::query()
-            ->withCount('users')
+            ->withCount(['users', 'rejectedUsers'])
             ->when($status !== 'all', function ($q) use ($status) {
                 $q->where('status', $status);
             })
@@ -31,6 +31,13 @@ class OnboardingReviewController extends Controller
             })
             ->latest('id')->paginate(20)->withQueryString();
 
+        // A rejected request's users live in rejected_onboarding_users; count those instead.
+        $institutions->getCollection()->each(function (Institution $institution) {
+            if ($institution->status === Institution::STATUS_REJECTED) {
+                $institution->users_count = $institution->rejected_users_count;
+            }
+        });
+
         return successResponse('Onboarding requests fetched.', [
             'institutions' => $institutions,
             'filters' => ['status' => $status, 'type' => $type, 'search' => $request->query('search')],
@@ -42,7 +49,10 @@ class OnboardingReviewController extends Controller
 
     public function show(Institution $institution): JsonResponse
     {
-        $institution->load('users');
+        // Rejected requests show the users archived at rejection (status "rejected").
+        $institution->status === Institution::STATUS_REJECTED
+            ? $institution->setRelation('users', $institution->rejectedUsers()->get())
+            : $institution->load('users');
 
         $files = [];
         if ($institution->proof_of_registration_path) {

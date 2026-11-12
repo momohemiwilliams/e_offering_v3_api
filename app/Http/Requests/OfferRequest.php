@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Models\Institution;
 use App\Models\Offer;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
@@ -63,8 +64,8 @@ class OfferRequest extends FormRequest
             'rate_max' => [$method === Offer::BOOK_BUILDING ? 'required' : 'nullable', 'numeric', 'gte:rate_min'],
             'implied_yield' => ['required', 'numeric', 'min:0'],
             'issue_price' => ['required', 'numeric', 'gt:0'],
-            'maturity_date' => [$hasTenor ? 'required' : 'nullable', 'date', 'after:close_at'],
-            'allotment_date' => ['required', 'date', 'after_or_equal:close_at'],
+            'maturity_date' => [$hasTenor ? 'required' : 'nullable', 'date', $this->comparedToCloseDay('after')],
+            'allotment_date' => ['required', 'date', $this->comparedToCloseDay('on or after')],
 
             'uses_receiving_agents' => ['boolean'],
             'bank_name' => ['required', 'string', 'max:100'],
@@ -85,6 +86,26 @@ class OfferRequest extends FormRequest
             'co_sponsors.*.bank_account_name' => ['nullable', 'string', 'max:191'],
             'co_sponsors.*.bank_account_number' => ['nullable', 'digits:10'],
         ];
+    }
+
+    /**
+     * Maturity and allotment are date-only, while the close date carries a time. Comparing
+     * them as datetimes treats the date as midnight, so only the calendar days are compared.
+     */
+    private function comparedToCloseDay(string $relation): \Closure
+    {
+        return function (string $attribute, $value, \Closure $fail) use ($relation) {
+            try {
+                $close = Carbon::parse((string) $this->input('close_at'))->startOfDay();
+                $day = Carbon::parse((string) $value)->startOfDay();
+            } catch (\Throwable $e) {
+                return; // The 'date' rules on both fields report unparseable input.
+            }
+            $ok = $relation === 'after' ? $day->greaterThan($close) : $day->greaterThanOrEqualTo($close);
+            if (! $ok) {
+                $fail("The :attribute must be a date {$relation} the proposed offer close date.");
+            }
+        };
     }
 
     public function withValidator(Validator $validator): void

@@ -96,6 +96,42 @@ class OnboardingApiTest extends TestCase
         });
     }
 
+    public function test_rejected_users_are_archived_and_can_register_again(): void
+    {
+        $this->postJson('/api/onboarding/tsp', $this->tspPayload($this->bothLevels()))->assertOk();
+        $institution = Institution::where('type', 'tsp')->firstOrFail();
+        $applicant = $institution->users()->firstOrFail();
+
+        $this->bearer($this->staff())
+            ->postJson("/api/admin/onboarding/{$institution->id}/reject", ['reason' => 'Proof of registration is unreadable.'])
+            ->assertOk();
+
+        // Moved out of users, kept in the archive, and still told why.
+        $this->assertSame(Institution::STATUS_REJECTED, $institution->fresh()->status);
+        $this->assertDatabaseMissing('users', ['email' => 'a@new.test']);
+        $this->assertDatabaseHas('rejected_onboarding_users', ['institution_id' => $institution->id, 'email' => 'a@new.test', 'access_level' => 'inputter']);
+        Notification::assertSentTo($applicant, PlatformNotification::class);
+
+        // The admin record still lists the archived users.
+        $this->bearer($this->staff())->getJson("/api/admin/onboarding/{$institution->id}")
+            ->assertOk()->assertJsonCount(2, 'data.institution.users')->assertJsonPath('data.institution.users.0.status', 'rejected');
+
+        // Same emails register again as a new pending request.
+        $this->postJson('/api/onboarding/tsp', $this->tspPayload($this->bothLevels()))->assertOk();
+        $this->assertSame(2, User::whereIn('email', ['a@new.test', 'b@new.test'])->where('status', User::STATUS_PENDING)->count());
+    }
+
+    public function test_rejected_institution_registration_number_can_be_reused(): void
+    {
+        Institution::create(['type' => 'qii', 'name' => 'Old QII', 'email' => 'q@old.test', 'registration_number' => 'RC123', 'status' => Institution::STATUS_REJECTED]);
+
+        $this->postJson('/api/onboarding/institutional', [
+            'consent' => true, 'category' => 'qii', 'name' => 'New QII', 'registration_number' => 'RC123', 'email' => 'q@new.test',
+            'certificate' => UploadedFile::fake()->create('cac.pdf', 50, 'application/pdf'),
+            'users' => $this->bothLevels(),
+        ])->assertOk();
+    }
+
     public function test_onboarding_review_is_admin_only(): void
     {
         $this->bearer($this->staff('investor'))->getJson('/api/admin/onboarding')->assertStatus(403);

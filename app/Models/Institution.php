@@ -57,6 +57,12 @@ class Institution extends Model
         return $this->hasMany(User::class);
     }
 
+    /** Users of a rejected request, moved out of `users` (see OnboardingService::reject). */
+    public function rejectedUsers(): HasMany
+    {
+        return $this->hasMany(RejectedOnboardingUser::class);
+    }
+
     public function offers(): HasMany
     {
         return $this->hasMany(Offer::class);

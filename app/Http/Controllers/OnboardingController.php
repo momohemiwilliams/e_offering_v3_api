@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Institution;
 use App\Models\User;
 use App\Services\BvnVerifier;
 use App\Services\OnboardingService;
@@ -61,7 +62,7 @@ class OnboardingController extends Controller
             'consent' => ['accepted'],
             'category' => ['required', Rule::in(['qii', 'non_qii'])],
             'name' => ['required', 'string', 'max:191'],
-            'registration_number' => ['required', 'string', 'max:60', Rule::unique('institutions', 'registration_number')->whereIn('type', ['qii', 'non_qii'])],
+            'registration_number' => ['required', 'string', 'max:60', Rule::unique('institutions', 'registration_number')->whereIn('type', ['qii', 'non_qii'])->whereNot('status', Institution::STATUS_REJECTED)],
             'email' => ['required', 'email', 'max:191'],
             'phone' => ['nullable', 'string', 'max:30'],
             'address' => ['nullable', 'string', 'max:255'],

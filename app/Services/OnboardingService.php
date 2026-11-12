@@ -187,18 +187,53 @@ class OnboardingService
         }
     }
 
+    /**
+     * Rejecting moves the request's users into rejected_onboarding_users and removes them
+     * from `users`, so the same email addresses can register again. The institution row is
+     * kept, as "rejected", for the admin's record of the request and its reason.
+     */
     public function reject(Institution $institution, User $admin, string $reason): void
     {
-        $institution->forceFill([
-            'status' => Institution::STATUS_REJECTED,
-            'rejection_reason' => $reason,
-            'reviewed_by' => $admin->id,
-            'reviewed_at' => now(),
-        ])->save();
+        $users = $institution->users()->get();
 
-        $this->audit->log('onboarding.rejected', 'Rejected onboarding of '.$institution->name, $institution, ['reason' => $reason], $admin);
+        DB::transaction(function () use ($institution, $admin, $reason, $users) {
+            $institution->forceFill([
+                'status' => Institution::STATUS_REJECTED,
+                'rejection_reason' => $reason,
+                'reviewed_by' => $admin->id,
+                'reviewed_at' => now(),
+            ])->save();
 
-        $institution->users()->get()->each(function (User $user) use ($reason) {
+            foreach ($users as $user) {
+                $institution->rejectedUsers()->create([
+                    'original_user_id' => $user->id,
+                    'type' => $user->type,
+                    'access_level' => $user->access_level,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'phone' => $user->phone,
+                    'privacy_consent_at' => $user->privacy_consent_at,
+                    'submitted_at' => $user->created_at,
+                    'rejected_at' => $institution->reviewed_at,
+                ]);
+            }
+
+            if ($users->isNotEmpty()) {
+                DB::table('notifications')->where('notifiable_type', User::class)->whereIn('notifiable_id', $users->modelKeys())->delete();
+                DB::table('password_resets')->whereIn('email', $users->pluck('email'))->delete();
+                // OTP codes and password history cascade with the user.
+                User::whereIn('id', $users->modelKeys())->delete();
+            }
+
+            $this->audit->log('onboarding.rejected', 'Rejected onboarding of '.$institution->name, $institution, [
+                'reason' => $reason,
+                'archived_users' => $users->pluck('email')->all(),
+            ], $admin);
+        });
+
+        // Sent after the commit, so a mail outage cannot undo the rejection. The in-memory
+        // models still carry each name and address for the email.
+        $users->each(function (User $user) use ($reason) {
             $this->mailQuietly($user, new PlatformNotification(
                 'Your e-Offering onboarding request was not approved',
                 'FMDQ reviewed your onboarding request and could not approve it. Reason: '.$reason,
